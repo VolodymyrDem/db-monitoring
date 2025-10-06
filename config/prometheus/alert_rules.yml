@@ -1,0 +1,69 @@
+groups:
+  - name: mysql_alerts
+    rules:
+      - alert: MySQLDown
+        expr: mysql_up == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "MySQL сервер недоступний"
+          description: "MySQL сервер {{ $labels.instance }} недоступний протягом більше 30 секунд"
+
+      - alert: MySQLSlowQueries
+        expr: rate(mysql_global_status_slow_queries[5m]) > 5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Багато повільних запитів MySQL"
+          description: "{{ $labels.instance }}: {{ $value }} повільних запитів за секунду"
+
+      - alert: MySQLConnectionsHigh
+        expr: mysql_global_status_threads_connected / mysql_global_variables_max_connections * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Високе використання з'єднань MySQL"
+          description: "{{ $labels.instance }}: використовується {{ $value }}% з'єднань"
+
+  - name: system_alerts
+    rules:
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Високе використання CPU"
+          description: "{{ $labels.instance }}: CPU використовується на {{ $value }}%"
+
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Високе використання пам'яті"
+          description: "{{ $labels.instance }}: пам'ять використовується на {{ $value }}%"
+
+  - name: application_alerts  
+    rules:
+      - alert: AuthServiceDown
+        expr: up{job="auth-service"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Сервіс авторизації недоступний"
+          description: "Сервіс авторизації недоступний протягом більше 1 хвилини"
+
+      - alert: HighFailedLogins
+        expr: rate(auth_login_attempts_total{status="failed"}[5m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Багато невдалих спроб входу"
+          description: "{{ $value }} невдалих спроб входу за секунду"
