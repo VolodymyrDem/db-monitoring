@@ -5,7 +5,6 @@ import json
 from datetime import datetime
 import logging
 
-# Налаштування логування
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -44,7 +43,7 @@ class UserSimulator:
     
     async def register_users(self, session):
         """Реєстрація тестових користувачів"""
-        for user in self.users[1:]:  # Пропускаємо admin, він вже існує
+        for user in self.users[1:]: 
             try:
                 url = f"{self.auth_service_url}/register"
                 data = {
@@ -88,7 +87,6 @@ class UserSimulator:
                     return success
                     
             elif action == "update_record":
-                # Спочатку отримаємо існуючі записи
                 url_read = f"{self.auth_service_url}/actions/read_records"
                 async with session.get(url_read, headers=headers, params={"limit": 5}) as read_response:
                     if read_response.status == 200:
@@ -112,7 +110,6 @@ class UserSimulator:
                 return False
                     
             elif action == "delete_record":
-                # Спочатку отримаємо існуючі записи
                 url_read = f"{self.auth_service_url}/actions/read_records"
                 async with session.get(url_read, headers=headers, params={"limit": 3}) as read_response:
                     if read_response.status == 200:
@@ -154,11 +151,9 @@ class UserSimulator:
         user = random.choice(self.users)
         username = user["username"]
         
-        # Авторизація якщо потрібно
         if username not in self.tokens:
             await self.login_user(session, username, user["password"])
         
-        # Виконання випадкової дії
         action = random.choice(self.actions)
         await self.perform_action(session, username, action)
     
@@ -167,20 +162,16 @@ class UserSimulator:
         logger.info("🚀 Запуск симулятора активності користувачів...")
         
         async with aiohttp.ClientSession() as session:
-            # Реєстрація користувачів
             await self.register_users(session)
             await asyncio.sleep(2)
             
-            # Початкова авторизація всіх користувачів
             for user in self.users:
                 await self.login_user(session, user["username"], user["password"])
                 await asyncio.sleep(0.5)
             
             logger.info("✅ Симулятор готовий. Початок симуляції активності...")
             
-            # Безперервна симуляція
             while True:
-                # Генеруємо 1-5 дій одночасно
                 num_actions = random.randint(1, 5)
                 tasks = []
                 
@@ -190,7 +181,6 @@ class UserSimulator:
                 
                 await asyncio.gather(*tasks)
                 
-                # Пауза між хвилями активності (1-4 секунди)
                 delay = random.randint(1, 4)
                 logger.info(f"⏱️ Пауза {delay} секунд до наступної хвилі активності...")
                 await asyncio.sleep(delay)

@@ -11,21 +11,17 @@ from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_
 from fastapi.responses import Response
 import time
 
-# Конфігурація
 DATABASE_URL = os.getenv("DATABASE_URL", "mysql+pymysql://dbuser:dbpassword@mysql:3306/monitoring_db")
 JWT_SECRET = os.getenv("JWT_SECRET", "your_jwt_secret_key_here")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 24
 
-# Створення FastAPI додатку
 app = FastAPI(title="Auth Service", description="Сервіс авторизації для системи моніторингу")
 
-# Налаштування бази даних
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=300)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# Модель користувача
 class User(Base):
     __tablename__ = "users"
     
@@ -38,41 +34,34 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     last_login = Column(DateTime)
 
-# Модель для бізнес-записів (з якими працюють користувачі)
 class Record(Base):
     __tablename__ = "records"
     
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String(200), nullable=False)
-    record_type = Column(String(50), nullable=False)  # user, product, order, report, config
+    record_type = Column(String(50), nullable=False) 
     description = Column(String(500))
-    created_by = Column(String(50), nullable=False)  # username хто створив
+    created_by = Column(String(50), nullable=False) 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     is_active = Column(Boolean, default=True)
 
-# Створення таблиць
 Base.metadata.create_all(bind=engine)
 
-# Налаштування хешування паролів
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# HTTP Bearer для JWT
 security = HTTPBearer()
 
-# Метрики Prometheus
 login_attempts = Counter("auth_login_attempts_total", "Загальна кількість спроб входу", ["status"])
 user_actions = Counter("user_actions_total", "Загальна кількість дій користувачів", ["action", "user"])
 db_queries_total = Counter("db_queries_total", "Загальна кількість запитів до бази даних")
 mysql_connection_status = Counter("mysql_connection_status_total", "Статус підключення до MySQL", ["status"])
 request_duration = Histogram("auth_request_duration_seconds", "Тривалість обробки запитів")
 
-# Функції для роботи з БД
 def get_db():
     db = SessionLocal()
-    db_queries_total.inc()  # Рахуємо кожне підключення до БД
+    db_queries_total.inc()
     try:
-        # Тестуємо підключення до БД
         db.execute(text("SELECT 1"))
         mysql_connection_status.labels(status="success").inc()
         yield db
@@ -108,18 +97,15 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Невалідний токен")
 
-# API endpoints
 @app.post("/register")
 async def register(username: str, email: str, password: str, db: Session = Depends(get_db)):
     start_time = time.time()
     
-    # Перевірка чи користувач вже існує
     existing_user = db.query(User).filter((User.username == username) | (User.email == email)).first()
     if existing_user:
         request_duration.observe(time.time() - start_time)
         raise HTTPException(status_code=400, detail="Користувач з таким логіном або email вже існує")
     
-    # Створення нового користувача
     hashed_password = get_password_hash(password)
     user = User(username=username, email=email, hashed_password=hashed_password)
     db.add(user)
@@ -132,7 +118,7 @@ async def register(username: str, email: str, password: str, db: Session = Depen
 @app.post("/login")
 async def login(username: str, password: str, db: Session = Depends(get_db)):
     start_time = time.time()
-    db_queries_total.inc()  # Рахуємо запит до БД для авторизації
+    db_queries_total.inc()
     
     user = db.query(User).filter(User.username == username).first()
     if not user or not verify_password(password, user.hashed_password):
@@ -145,12 +131,10 @@ async def login(username: str, password: str, db: Session = Depends(get_db)):
         request_duration.observe(time.time() - start_time)
         raise HTTPException(status_code=401, detail="Акаунт деактивований")
     
-    # Оновлення часу останнього входу
     user.last_login = datetime.utcnow()
     db.commit()
-    db_queries_total.inc()  # Рахуємо ще один запит для оновлення last_login
+    db_queries_total.inc()  
     
-    # Створення JWT токену
     access_token = create_access_token(data={"sub": user.username, "is_admin": user.is_admin})
     
     login_attempts.labels(status="success").inc()
@@ -173,9 +157,8 @@ async def metrics():
 @app.post("/actions/create_record")
 async def create_record(record_type: str, title: str, description: str = "", current_user: str = Depends(verify_token), db: Session = Depends(get_db)):
     """Створення реального запису в БД MySQL"""
-    db_queries_total.inc()  # Рахуємо запит до БД
+    db_queries_total.inc() 
     
-    # Створюємо новий запис в БД
     new_record = Record(
         title=title,
         record_type=record_type,
@@ -185,7 +168,7 @@ async def create_record(record_type: str, title: str, description: str = "", cur
     db.add(new_record)
     db.commit()
     db.refresh(new_record)
-    db_queries_total.inc()  # Ще один запит для commit
+    db_queries_total.inc()
     
     user_actions.labels(action="create", user=current_user).inc()
     return {
@@ -198,14 +181,12 @@ async def create_record(record_type: str, title: str, description: str = "", cur
 @app.post("/actions/update_record")
 async def update_record(record_id: int, title: str = None, description: str = None, current_user: str = Depends(verify_token), db: Session = Depends(get_db)):
     """Оновлення реального запису в БД MySQL"""
-    db_queries_total.inc()  # Рахуємо запит до БД
+    db_queries_total.inc()
     
-    # Знаходимо запис
     record = db.query(Record).filter(Record.id == record_id, Record.is_active == True).first()
     if not record:
         raise HTTPException(status_code=404, detail="Запис не знайдено")
     
-    # Оновлюємо поля
     if title:
         record.title = title
     if description:
@@ -213,7 +194,7 @@ async def update_record(record_id: int, title: str = None, description: str = No
     record.updated_at = datetime.utcnow()
     
     db.commit()
-    db_queries_total.inc()  # Ще один запит для commit
+    db_queries_total.inc()
     
     user_actions.labels(action="update", user=current_user).inc()
     return {
@@ -226,19 +207,17 @@ async def update_record(record_id: int, title: str = None, description: str = No
 @app.delete("/actions/delete_record")
 async def delete_record(record_id: int, current_user: str = Depends(verify_token), db: Session = Depends(get_db)):
     """Видалення реального запису з БД MySQL (soft delete)"""
-    db_queries_total.inc()  # Рахуємо запит до БД
+    db_queries_total.inc() 
     
-    # Знаходимо запис
     record = db.query(Record).filter(Record.id == record_id, Record.is_active == True).first()
     if not record:
         raise HTTPException(status_code=404, detail="Запис не знайдено")
     
-    # Soft delete - позначаємо як неактивний
     record.is_active = False
     record.updated_at = datetime.utcnow()
     
     db.commit()
-    db_queries_total.inc()  # Ще один запит для commit
+    db_queries_total.inc()
     
     user_actions.labels(action="delete", user=current_user).inc()
     return {
@@ -250,9 +229,8 @@ async def delete_record(record_id: int, current_user: str = Depends(verify_token
 @app.get("/actions/read_records")
 async def read_records(record_type: str = None, limit: int = 10, current_user: str = Depends(verify_token), db: Session = Depends(get_db)):
     """Читання реальних записів з БД MySQL"""
-    db_queries_total.inc()  # Рахуємо запит до БД
+    db_queries_total.inc()
     
-    # Формуємо запит
     query = db.query(Record).filter(Record.is_active == True)
     if record_type:
         query = query.filter(Record.record_type == record_type)
@@ -294,7 +272,6 @@ async def mysql_status():
 
 if __name__ == "__main__":
     import uvicorn
-    # Створення адміністратора за замовчуванням
     db = SessionLocal()
     admin_user = db.query(User).filter(User.username == "admin").first()
     if not admin_user:
@@ -308,12 +285,10 @@ if __name__ == "__main__":
         db.commit()
         print("Створено адміністратора: admin/admin123")
     
-    # Створення тестових користувачів
     test_users = [
         {"username": "user1", "email": "user1@example.com", "password": "password123"},
         {"username": "user2", "email": "user2@example.com", "password": "password456"},
         {"username": "developer", "email": "developer@example.com", "password": "dev123"},
-        # manager залишаємо незареєстрованим для демонстрації помилок
     ]
     
     for user_data in test_users:
