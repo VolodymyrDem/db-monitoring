@@ -22,45 +22,71 @@ class UserSimulator:
         self.record_types = ["user", "product", "order", "report", "config"]
         self.tokens = {}
     
-    async def login_user(self, session, username, password):
-        """Авторизація користувача та отримання токену"""
-        try:
-            url = f"{self.auth_service_url}/login"
-            params = {"username": username, "password": password}
-            
-            async with session.post(url, params=params) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    self.tokens[username] = data["access_token"]
-                    logger.info(f"✅ Користувач {username} увійшов в систему")
-                    return True
-                else:
-                    logger.warning(f"❌ Помилка входу користувача {username}: {response.status}")
-                    return False
-        except Exception as e:
-            logger.error(f"❌ Помилка при вході {username}: {e}")
-            return False
-    
-    async def register_users(self, session):
-        """Реєстрація тестових користувачів"""
-        for user in self.users[1:]: 
+    async def wait_for_auth_service(self, session, timeout_seconds: int = 60):
+        """Очікування готовності auth-service по /health з ретраями."""
+        url = f"{self.auth_service_url}/health"
+        deadline = asyncio.get_event_loop().time() + timeout_seconds
+        attempt = 0
+        while True:
+            attempt += 1
             try:
-                url = f"{self.auth_service_url}/register"
-                data = {
-                    "username": user["username"],
-                    "email": f"{user['username']}@example.com",
-                    "password": user["password"]
-                }
-                
-                async with session.post(url, json=data) as response:
-                    if response.status in [200, 201]:
-                        logger.info(f"✅ Користувача {user['username']} зареєстровано")
-                    elif response.status == 400:
-                        logger.info(f"ℹ️ Користувач {user['username']} вже існує")
-                    else:
-                        logger.warning(f"❌ Помилка реєстрації {user['username']}: {response.status}")
+                async with session.get(url, timeout=5) as resp:
+                    if resp.status == 200:
+                        logger.info("✅ auth-service готовий (/health 200)")
+                        return True
             except Exception as e:
-                logger.error(f"❌ Помилка реєстрації {user['username']}: {e}")
+                # ще не готовий — просто чекаємо
+                pass
+            if asyncio.get_event_loop().time() > deadline:
+                logger.warning("⚠️ Очікування auth-service перевищило таймаут, продовжуємо спроби працювати")
+                return False
+            await asyncio.sleep(1)
+    
+    async def login_user(self, session, username, password, max_retries: int = 5, retry_delay: float = 1.0):
+        """Авторизація користувача з ретраями."""
+        url = f"{self.auth_service_url}/login"
+        params = {"username": username, "password": password}
+        last_status = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                async with session.post(url, params=params) as response:
+                    last_status = response.status
+                    if response.status == 200:
+                        data = await response.json()
+                        self.tokens[username] = data["access_token"]
+                        logger.info(f"✅ Користувач {username} увійшов в систему")
+                        return True
+            except Exception as e:
+                last_status = str(e)
+            await asyncio.sleep(retry_delay)
+        logger.warning(f"❌ Помилка входу користувача {username}: {last_status}")
+        return False
+    
+    async def register_users(self, session, max_retries: int = 8, retry_delay: float = 1.0):
+        """Реєстрація тестових користувачів (крім admin) з ретраями."""
+        url = f"{self.auth_service_url}/register"
+        for user in self.users[1:]:  # пропускаємо admin
+            params = {
+                "username": user["username"],
+                "email": f"{user['username']}@example.com",
+                "password": user["password"]
+            }
+            last_status = None
+            for attempt in range(1, max_retries + 1):
+                try:
+                    async with session.post(url, params=params) as response:
+                        last_status = response.status
+                        if response.status in [200, 201]:
+                            logger.info(f"✅ Користувача {user['username']} зареєстровано")
+                            break
+                        elif response.status == 400:
+                            logger.info(f"ℹ️ Користувач {user['username']} вже існує")
+                            break
+                except Exception as e:
+                    last_status = str(e)
+                await asyncio.sleep(retry_delay)
+            else:
+                logger.warning(f"❌ Помилка реєстрації {user['username']}: {last_status}")
     
     async def perform_action(self, session, username, action):
         """Виконання дії користувача"""
@@ -162,12 +188,17 @@ class UserSimulator:
         logger.info("🚀 Запуск симулятора активності користувачів...")
         
         async with aiohttp.ClientSession() as session:
+            # Дочекаємося готовності auth-service
+            await self.wait_for_auth_service(session)
+
+            # Реєстрація користувачів з ретраями
             await self.register_users(session)
-            await asyncio.sleep(2)
-            
+            await asyncio.sleep(1)
+
+            # Логіни з ретраями
             for user in self.users:
-                await self.login_user(session, user["username"], user["password"])
-                await asyncio.sleep(0.5)
+                await self.login_user(session, user["username"], user["password"]) 
+                await asyncio.sleep(0.3)
             
             logger.info("✅ Симулятор готовий. Початок симуляції активності...")
             

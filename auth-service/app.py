@@ -206,24 +206,43 @@ async def update_record(record_id: int, title: str = None, description: str = No
 
 @app.delete("/actions/delete_record")
 async def delete_record(record_id: int, current_user: str = Depends(verify_token), db: Session = Depends(get_db)):
-    """Видалення реального запису з БД MySQL (soft delete)"""
-    db_queries_total.inc() 
-    
-    record = db.query(Record).filter(Record.id == record_id, Record.is_active == True).first()
+    """Видалення реального запису з БД MySQL (soft delete).
+    Idempotent: якщо запис вже видалено або не існує, повертаємо 200 з повідомленням.
+    """
+    db_queries_total.inc()
+
+    record = db.query(Record).filter(Record.id == record_id).first()
     if not record:
-        raise HTTPException(status_code=404, detail="Запис не знайдено")
-    
+        # Ідемпотентне видалення: відсутній запис розглядаємо як уже видалений
+        user_actions.labels(action="delete_noop", user=current_user).inc()
+        return {
+            "message": f"Запис ID {record_id} вже видалений або не існує",
+            "user": current_user,
+            "record_id": record_id,
+            "status": "noop"
+        }
+
+    if not record.is_active:
+        user_actions.labels(action="delete_noop", user=current_user).inc()
+        return {
+            "message": f"Запис ID {record_id} вже видалений",
+            "user": current_user,
+            "record_id": record_id,
+            "status": "noop"
+        }
+
     record.is_active = False
     record.updated_at = datetime.utcnow()
-    
+
     db.commit()
     db_queries_total.inc()
-    
+
     user_actions.labels(action="delete", user=current_user).inc()
     return {
-        "message": f"Запис ID {record_id} видалено", 
+        "message": f"Запис ID {record_id} видалено",
         "user": current_user,
-        "record_id": record.id
+        "record_id": record.id,
+        "status": "deleted"
     }
 
 @app.get("/actions/read_records")
